@@ -1,0 +1,39 @@
+{
+  "responses": [
+    {
+      "serial": "R1001",
+      "answers": {"Q1": "D", "Q2": true, "Q3": 45, "Q4": true, "Q5": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true},
+        {"qid": "Q5", "shown": true}
+      ],
+      "_note": "仅新版相容（第一个必须新版点）"
+    },
+    {
+      "serial": "R1002",
+      "answers": {"Q1": "B", "Q4": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": false},
+        {"qid": "Q3", "shown": false},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅旧版相容：夹在两个新版点之间，使新版无法连成一段 -> 整批无解"
+    },
+    {
+      "serial": "R1003",
+      "answers": {"Q1": "A", "Q2": true, "Q3": 50, "Q4": false, "Q5": false},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true},
+        {"qid": "Q5", "shown": true}
+      ],
+      "_note": "仅新版相容（第二个必须新版点）"
+    }
+  ]
+}

@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}旧答卷夜骑纳入核查{% endblock %}</title>
+  <title>{% block title %}夜骑问卷版号核查{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <header>
-  <h1>旧答卷夜骑纳入核查</h1>
-  <p class="sub">交通调查 · 旧版答卷可补全性与新版纳入判定</p>
+  <h1>夜骑问卷版号核查</h1>
+  <p class="sub">调查终端旧版/新版答卷核对 · 新版按流水号至多一段连续 · 每批最多 2000 份</p>
 </header>
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -23,6 +23,6 @@
   {% endwith %}
   {% block body %}{% endblock %}
 </main>
-<footer>条件支持 AND/OR/NOT（亦可用 与/或/非、&amp;&amp;/||/!），筛查项至多 12 个。</footer>
+<footer>条件支持 <code>Q1 == 'A'</code>、<code>Q3 &gt;= 3</code>、是非题简写与 AND/OR/NOT（亦可用 与/或/非）。</footer>
 </body>
 </html>

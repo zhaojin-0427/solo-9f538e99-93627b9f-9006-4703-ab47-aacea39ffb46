@@ -1,0 +1,17 @@
+{
+  "version": "v2.0-new",
+  "questions": [
+    {"qid": "Q1", "qtype": "single", "options": ["A", "B", "C", "D"],
+     "comment": "夜间骑行主要目的（新版增加 D 通勤）"},
+    {"qid": "Q2", "qtype": "bool",
+     "comment": "是否佩戴头盔（新版改为无条件展示）"},
+    {"qid": "Q3", "qtype": "number", "min": 0, "max": 180,
+     "comment": "单次夜骑时长（分钟），新版上限放宽到 180，且 Q2 跳过时也问"},
+    {"qid": "Q4", "qtype": "bool",
+     "comment": "是否配有车前灯（新版仅在 Q3 >= 30 时展示）",
+     "condition": "Q3 >= 30"},
+    {"qid": "Q5", "qtype": "bool",
+     "comment": "新增题：是否使用反光背心",
+     "condition": "Q2 == true"}
+  ]
+}

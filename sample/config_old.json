@@ -1,0 +1,15 @@
+{
+  "version": "v1.0-old",
+  "questions": [
+    {"qid": "Q1", "qtype": "single", "options": ["A", "B", "C"],
+     "comment": "夜间骑行主要目的（旧版三选项）"},
+    {"qid": "Q2", "qtype": "bool",
+     "comment": "是否佩戴头盔（旧版仅在 Q1=A 时展示）",
+     "condition": "Q1 == 'A'"},
+    {"qid": "Q3", "qtype": "number", "min": 0, "max": 120,
+     "comment": "单次夜骑时长（分钟），旧版 Q2 展示后才问",
+     "condition": "Q2 == true"},
+    {"qid": "Q4", "qtype": "bool",
+     "comment": "是否配有车前灯（旧版无条件展示）"}
+  ]
+}

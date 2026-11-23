@@ -1,161 +1,175 @@
 {% extends "base.html" %}
 {% block body %}
 
-{# ---------------- 配置区 ---------------- #}
+{# ---------------- 1. 两版配置 ---------------- #}
 <section class="card">
-  <h2>1. 建立核查任务</h2>
-  <p class="hint">粘贴或上传配置 JSON。可与旧答卷合并为一个文件，结构见
-    <code>{"config": {...}, "archive": {...}}</code>；也可之后单独上传答卷。</p>
+  <h2>1. 填写两版问卷配置</h2>
+  <p class="hint">分别粘贴或上传旧版、新版配置 JSON。每份答卷的已答项与逐题展示/跳过记录都必须符合所分到的版本。</p>
   <form method="post" action="{{ url_for('setup') }}" enctype="multipart/form-data">
-    <textarea name="config_text" rows="14" placeholder='{
-  "items": ["S1", "S2", "S3"],
-  "labels": {"S1": "夜间佩戴头盔", "S2": "配有车前灯", "S3": "单次夜骑超过30分钟"},
-  "followups": [
-    {"qid": "Q1", "condition": "S1 AND NOT S2", "shown": true},
-    {"qid": "Q2", "condition": "S3 OR S1", "shown": false}
-  ],
-  "inclusion": "S1 AND (S2 OR S3)"
+    <div class="grid-2">
+      <div>
+        <h3>旧版配置</h3>
+        <textarea name="old_config_text" rows="12" placeholder='{
+  "version": "v1.0",
+  "questions": [
+    {"qid": "Q1", "qtype": "single", "options": ["A", "B", "C"]},
+    {"qid": "Q2", "qtype": "bool", "condition": "Q1 == 'A'"}
+  ]
+}'></textarea>
+        <input type="file" name="old_config_file" accept=".json,application/json">
+      </div>
+      <div>
+        <h3>新版配置</h3>
+        <textarea name="new_config_text" rows="12" placeholder='{
+  "version": "v2.0",
+  "questions": [
+    {"qid": "Q1", "qtype": "single", "options": ["A", "B", "C", "D"]},
+    {"qid": "Q2", "qtype": "bool"},
+    {"qid": "Q3", "qtype": "number", "min": 0, "max": 60, "condition": "Q2 == true"}
+  ]
+}'></textarea>
+        <input type="file" name="new_config_file" accept=".json,application/json">
+      </div>
+    </div>
+    <h3>该终端答卷 JSON（可选，也可稍后上传；每批最多 2000 份）</h3>
+    <textarea name="batch_text" rows="6" placeholder='{
+  "responses": [
+    {"serial": "R0001",
+     "answers": {"Q1": "A", "Q2": true},
+     "records": [{"qid": "Q1", "shown": true}, {"qid": "Q2", "shown": true}]}
+  ]
 }'></textarea>
     <div class="row">
-      <input type="file" name="config_file" accept=".json,application/json">
-      <button type="submit">建立任务</button>
+      <input type="file" name="batch_file" accept=".json,application/json">
+      <button type="submit">建立配置并核定</button>
       <button type="submit" formaction="{{ url_for('reset') }}" formmethod="post" class="ghost">重置全部</button>
     </div>
   </form>
 </section>
 
-{% if cfg %}
-{# ---------------- 答卷上传区 ---------------- #}
+{% if snap or has_pair %}
+{# ---------------- 2. 批次总览 ---------------- #}
 <section class="card">
-  <h2>2. 上传旧答卷</h2>
-  <p class="hint">已答筛查项 + 当时展示/跳过的全部追问题号。跳题记录会成为补全答案必须满足的约束。</p>
-  <form method="post" action="{{ url_for('upload_archive') }}" enctype="multipart/form-data">
-    <textarea name="archive_text" rows="10" placeholder='{
-  "answers": {"S1": true},
-  "followups": [
-    {"qid": "Q1", "shown": true},
-    {"qid": "Q2", "shown": false}
-  ]
-}'></textarea>
-    <div class="row">
-      <input type="file" name="archive_file" accept=".json,application/json">
-      <button type="submit">载入答卷</button>
-    </div>
-  </form>
-</section>
+  <h2>2. 批次核定结果</h2>
+  {% if snap %}
+    <p class="hint">
+      旧版版号 <code>{{ meta.old_version }}</code> · 新版版号 <code>{{ meta.new_version }}</code>
+      · 当前已提交状态 <strong>revision={{ meta.revision }}</strong>（{{ meta.created_at }})
+    </p>
+    {% if not meta.solvable %}
+      <div class="verdict big conflict">整批无解：不存在满足“新版至多连续一段”的划分</div>
+      <p>卡住划分的流水号：
+        {% for s in meta.stuck_serials %}<span class="tag conflict">{{ s }}</span> {% endfor %}
+      </p>
+      <p class="hint">原数据与既有下载结果保持不变；请按流水号更正后重试。
+        无解状态下不提供入仓下载（没有可靠版号）。</p>
+    {% else %}
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-num">{{ meta.total }}</div><div class="stat-label">批内答卷</div></div>
+        <div class="stat new"><div class="stat-num">{{ meta.confirmed_new }}</div><div class="stat-label">确定新版</div></div>
+        <div class="stat old"><div class="stat-num">{{ meta.confirmed_old }}</div><div class="stat-label">确定旧版</div></div>
+        <div class="stat pending"><div class="stat-num">{{ meta.pending }}</div><div class="stat-label">待核</div></div>
+      </div>
+      <p class="hint">“待核”表示在不同可行划分下可新可旧；下载入仓 JSON 只收确定新版。</p>
+      <a class="button" href="{{ url_for('download') }}">下载入仓 JSON（仅确定新版，revision={{ meta.revision }}）</a>
+    {% endif %}
 
-{# ---------------- 判定结果区 ---------------- #}
-<section class="card result-card verdict-{{ result.verdict }}">
-  <h2>3. 判定结果</h2>
-
-  {% if result.verdict == 'conflict' %}
-    <div class="verdict big conflict">旧档矛盾：不存在与展示/跳过记录相符的补全</div>
-    <p>以下约束构成一个最小矛盾核（同时满足它们没有任何答案组合），请优先电话核对：</p>
-    <ul class="conflict-list">
-      {% for c in result.conflicting %}<li>{{ c.description }}</li>{% endfor %}
-    </ul>
-
-  {% elif result.verdict == 'include' %}
-    <div class="verdict big include">可直接判定：纳入新版夜骑分析</div>
-    <p>全部 {{ result.feasible_count }} 种与旧档相符的补全，纳入条件结论一致。</p>
-
-  {% elif result.verdict == 'exclude' %}
-    <div class="verdict big exclude">可直接判定：不纳入新版夜骑分析</div>
-    <p>全部 {{ result.feasible_count }} 种与旧档相符的补全，纳入条件结论一致。</p>
-
+    <h3>重新上传/替换批次</h3>
+    <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+      <textarea name="batch_text" rows="4" placeholder='{"responses": [...]}'></textarea>
+      <div class="row">
+        <input type="file" name="batch_file" accept=".json,application/json">
+        <button type="submit">替换批次并重新核定</button>
+      </div>
+    </form>
   {% else %}
-    <div class="verdict big uncertain">结论有分歧，需要电话补问</div>
-    <div class="stat-grid">
-      <div class="stat">
-        <div class="stat-num">{{ result.worst_remaining }}</div>
-        <div class="stat-label">从当前起最坏还要问几题</div>
+    <div class="verdict big pending">两版配置已建立，尚未导入答卷</div>
+    <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+      <textarea name="batch_text" rows="6" placeholder='{"responses": [...]}'></textarea>
+      <div class="row">
+        <input type="file" name="batch_file" accept=".json,application/json">
+        <button type="submit">上传答卷并核定</button>
       </div>
-      <div class="stat">
-        <div class="stat-num">{{ result.feasible_count }}</div>
-        <div class="stat-label">与旧档相符的补全数</div>
-      </div>
-    </div>
-    <p>推荐优先补问
-      <strong class="recommend">{{ cfg.labels.get(result.recommended, result.recommended) }}
-      （{{ result.recommended }}）</strong>——该题使最坏剩余题数最少。</p>
+    </form>
   {% endif %}
-</section>
-
-{# ---------------- 上次被拒绝的提交 ---------------- #}
-{% if last_submission %}
-<section class="card conflict-detail">
-  <h3>上次提交因冲突被拒绝（页面仍显示提交前结果）</h3>
-  <p>尝试填写：<strong>{{ cfg.labels.get(last_submission.item, last_submission.item) }}
-    （{{ last_submission.item }}）= {{ last_submission.value | yn }}</strong></p>
-  <p>与之冲突的约束：</p>
-  <ul class="conflict-list">
-    {% for d in last_submission.conflicts %}<li>{{ d }}</li>{% endfor %}
-  </ul>
 </section>
 {% endif %}
 
-{# ---------------- 筛查项与补问区 ---------------- #}
+{% if snap %}
+{# ---------------- 3. 逐份查询 ---------------- #}
 <section class="card">
-  <h2>4. 筛查项答案与补问</h2>
-  {% if result.implied %}
-  <p class="hint">以下未答项已被旧档约束唯一确定（无需再问）：
-    {% for name, val in result.implied.items() %}
-      <span class="implied">{{ cfg.labels.get(name, name) }} = {{ val | yn }}</span>{% if not loop.last %}；{% endif %}
-    {% endfor %}
-  </p>
+  <h2>3. 按流水号查询单份结论</h2>
+  <form method="get" action="{{ url_for('index') }}" class="inline">
+    <input type="text" name="serial" value="{{ detail.serial if detail else '' }}"
+           placeholder="输入流水号，如 R0007" required>
+    <button type="submit">查询</button>
+  </form>
+
+  {% if detail %}
+  <div class="detail verdict-{{ detail.verdict }}">
+    <h3>流水号 {{ detail.serial }} —
+      <span class="tag {{ detail.verdict }}">{{ verdict_labels[detail.verdict] }}</span>
+    </h3>
+    <p><strong>与旧版（{{ meta.old_version }}）：</strong>
+      {% if detail.compat_old %}<span class="tag confirmed_old">相容</span>
+      {% else %}<span class="tag conflict">不相容</span>{% endif %}
+      {% if detail.old_violations and not detail.compat_old %}
+        <span class="hint">{{ detail.old_violations | join('；') }}</span>
+      {% endif %}
+    </p>
+    <p><strong>与新版（{{ meta.new_version }}）：</strong>
+      {% if detail.compat_new %}<span class="tag confirmed_new">相容</span>
+      {% else %}<span class="tag conflict">不相容</span>{% endif %}
+      {% if detail.new_violations and not detail.compat_new %}
+        <span class="hint">{{ detail.new_violations | join('；') }}</span>
+      {% endif %}
+    </p>
+    <details>
+      <summary>查看该份答卷原始内容</summary>
+      <pre>{{ detail.raw | tojson(indent=2) }}</pre>
+    </details>
+  </div>
   {% endif %}
+
+  <h3>全批次一览（按流水号顺序）</h3>
+  <div class="table-wrap">
   <table>
-    <thead><tr><th>变量</th><th>筛查项</th><th>当前答案</th><th>最坏题数（若选问此项）</th><th>操作</th></tr></thead>
+    <thead><tr><th>#</th><th>流水号</th><th>旧版相容</th><th>新版相容</th><th>版号结论</th><th></th></tr></thead>
     <tbody>
-    {% for name in cfg.items %}
-      <tr {% if name == result.recommended %}class="recommended-row"{% endif %}>
-        <td><code>{{ name }}</code></td>
-        <td>{{ cfg.labels.get(name, name) }}</td>
-        <td>
-          {% if name in answers %}<span class="tag answered">{{ answers[name] | yn }}</span>
-          {% elif name in result.implied %}<span class="tag implied">隐含 {{ result.implied[name] | yn }}</span>
-          {% else %}<span class="tag unknown">未答</span>{% endif %}
-        </td>
-        <td>
-          {% set cand = result.candidates | selectattr(0, 'equalto', name) | list %}
-          {% if cand %}{{ cand[0][1] }} 题{% else %}—{% endif %}
-        </td>
-        <td>
-          {% if name in answers %}已确认
-          {% elif result.verdict != 'conflict' %}
-          <form method="post" action="{{ url_for('submit_answer') }}" class="inline">
-            <input type="hidden" name="item" value="{{ name }}">
-            <button name="value" value="true" class="yes">答“是”</button>
-            <button name="value" value="false" class="no">答“否”</button>
-          </form>
-          {% else %}矛盾状态{% endif %}
-        </td>
+    {% for r in snap.responses %}
+      <tr class="row-{{ r.verdict }}">
+        <td>{{ loop.index }}</td>
+        <td><code>{{ r.serial }}</code></td>
+        <td>{{ '相容' if r.compat_old else '不相容' }}</td>
+        <td>{{ '相容' if r.compat_new else '不相容' }}</td>
+        <td><span class="tag {{ r.verdict }}">{{ verdict_labels[r.verdict] }}</span></td>
+        <td><a href="{{ url_for('index', serial=r.serial) }}">查看/更正</a></td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  <form method="post" action="{{ url_for('reset_answers') }}" class="mt">
-    <button class="ghost" type="submit">清空全部答案（重新补问）</button>
-  </form>
+  </div>
 </section>
 
-{# ---------------- 约束回显区 ---------------- #}
+{# ---------------- 4. 更正 ---------------- #}
 <section class="card">
-  <h2>5. 当前条件与跳题约束</h2>
-  <p><strong>新版纳入条件：</strong><code>{{ cfg.inclusion_text }}</code></p>
-  <table>
-    <thead><tr><th>追问题号</th><th>旧版展示条件</th><th>旧答卷记录</th><th>对补全的要求</th></tr></thead>
-    <tbody>
-    {% for f in cfg.followups %}
-      <tr>
-        <td><code>{{ f.qid }}</code></td>
-        <td><code>{{ f.condition_display }}</code></td>
-        <td><span class="tag {{ 'answered' if f.shown else 'unknown' }}">{{ '实际展示' if f.shown else '跳过' }}</span></td>
-        <td>条件须为 <strong>{{ f.shown | yn }}</strong></td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <h2>4. 按流水号更正一份</h2>
+  <p class="hint">
+    更正只重新判定这一份与两版是否相容，不逐份扫描或改写其余答卷；
+    受影响的版号结论随更正一并更新（revision +1）。若更正使整批无解，将被拒绝并指出卡住流水号，原数据照旧。
+  </p>
+  <form method="post" action="{{ url_for('correct') }}" enctype="multipart/form-data">
+    <label>流水号
+      <input type="text" name="serial" value="{{ detail.serial if detail else '' }}"
+             placeholder="R0007" required>
+    </label>
+    <textarea name="corrected_text" rows="8"
+      placeholder='{"serial": "R0007", "answers": {...}, "records": [...]}'></textarea>
+    <div class="row">
+      <input type="file" name="corrected_file" accept=".json,application/json">
+      <button type="submit">提交更正并重判</button>
+    </div>
+  </form>
 </section>
 {% endif %}
 

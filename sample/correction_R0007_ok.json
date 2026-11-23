@@ -1,0 +1,12 @@
+{
+  "serial": "R0007",
+  "answers": {"Q1": "C", "Q2": true, "Q3": 75, "Q4": false, "Q5": true},
+  "records": [
+    {"qid": "Q1", "shown": true},
+    {"qid": "Q2", "shown": true},
+    {"qid": "Q3", "shown": true},
+    {"qid": "Q4", "shown": true},
+    {"qid": "Q5", "shown": true}
+  ],
+  "_note": "更正 R0007（成功场景）：仍是仅新版相容的答卷（含新版独有题 Q5，旧版必然不相容），只改答案内容；可行新版段 R0005..R0007 不变，批次仍有解，revision +1"
+}

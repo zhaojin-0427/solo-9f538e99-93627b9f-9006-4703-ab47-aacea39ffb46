@@ -1,292 +1,368 @@
 # -*- coding: utf-8 -*-
-"""判定引擎：可行性枚举 + 最小最坏提问数。
+"""答卷批次解析与版号可行划分求解。
 
-把 n（<=12）个是非筛查项的取值组合编码为 n 位掩码，逐一枚举全部 2^n 种补全，
-再用旧答卷约束（展示/跳过的追问题条件）与已答筛查项过滤：
+核心事实（按流水号排序后的第 i 份答卷）：
+- compat_old[i]：该答卷与旧版配置相容
+- compat_new[i]：该答卷与新版配置相容
 
-- 某追问题“展示过” => 其展示条件在补全下必须为真
-- 某追问题“跳过”   => 其展示条件在补全下必须为假
-- 已答筛查项        => 补全必须与答案一致
+版号划分规则：新版答卷按流水号只能连成一段（也可以一段都没有），其余为旧版。
+因此一个可行划分由区间 [l, r]（含端点，允许空区间）表示，区间内每份都必须
+与新版相容，区间外每份都必须与旧版相容。
 
-过滤后：
-- 无可行补全            => 旧档矛盾，给出最小矛盾约束核
-- 全部可行补全结论一致  => 直接判定纳入/不纳入
-- 结论仍有分歧          => 用 minimax 选出使“从当前起最坏还要问几题”最小的未答项
+结论分类（取全部可行划分的交集）：
+- 确定新版：在每个可行划分里都落在新版段
+- 确定旧版：在每个可行划分里都落在新版段之外
+- 待核    ：既有划分把它放新版、也有划分把它放旧版
+- 无解    ：不存在任何可行划分，并给出卡住划分的流水号
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Optional
 
-from .conditions import evaluate_mask
-from .config import AnalysisConfig, FollowUp
+from .compat import check_compatibility
+from .config import QuestionnairePair, VersionConfig
+
+MAX_BATCH_SIZE = 2000
+
+# 版号核查结论
+CONFIRMED_OLD = "confirmed_old"
+CONFIRMED_NEW = "confirmed_new"
+PENDING = "pending"
+UNSOLVABLE = "unsolvable"
+
+VERDICT_LABELS = {
+    CONFIRMED_OLD: "确定旧版",
+    CONFIRMED_NEW: "确定新版",
+    PENDING: "待核",
+    UNSOLVABLE: "无解",
+}
 
 
-@dataclass(frozen=True)
-class Constraint:
-    kind: str          # "answer" | "followup"
-    ref: str           # 筛查项变量名 或 追问题号
-    required: bool     # 条件必须取的布尔值
-    description: str   # 面向页面的中文描述
+class BatchError(ValueError):
+    """批次数据不合法（结构层面，区别于单份答卷的相容性）。"""
 
 
 @dataclass
-class AnalysisResult:
-    satisfiable: bool
-    answers: Dict[str, bool]
-    feasible_count: int = 0
-    inclusion_values: Optional[set] = None          # 可行补全下纳入条件的取值集合
-    verdict: Optional[str] = None                   # "include" / "exclude" / "uncertain" / "conflict"
-    worst_remaining: Optional[int] = None           # 从当前状态起最坏还要问几题
-    recommended: Optional[str] = None               # 推荐补问的筛查项变量名
-    candidates: List[Tuple[str, int]] = field(default_factory=list)
-    implied: Dict[str, bool] = field(default_factory=dict)   # 被现有约束唯一确定的未答项
-    conflicting: List[Constraint] = field(default_factory=list)      # 最小矛盾核
-    feasibility_by_mask: Optional[List[bool]] = None
+class ResponseData:
+    """规范化后的单份答卷（原始数据保留在 raw，供更正与下载使用）。"""
+    serial: str
+    answers: Dict[str, Any]
+    records: Dict[str, bool]
+    raw: dict
+    parse_error: Optional[str] = None
+    # 相容性（parse_error 非空时均为 False）
+    compat_old: bool = False
+    compat_new: bool = False
+    old_violations: List[str] = field(default_factory=list)
+    new_violations: List[str] = field(default_factory=list)
+    # 划分结论
+    verdict: Optional[str] = None
 
+    def copy_verdict_state(self) -> "ResponseData":
+        """复制参与划分求解的可变状态（verdict），答案/相容标志等只读数据共享。
 
-def build_constraints(cfg: AnalysisConfig, answers: Dict[str, bool]) -> List[Constraint]:
-    constraints: List[Constraint] = []
-    for name, value in answers.items():
-        constraints.append(
-            Constraint(
-                kind="answer",
-                ref=name,
-                required=bool(value),
-                description=f"已答筛查项 {cfg.labels.get(name, name)} = {'是' if value else '否'}",
-            )
+        更正试算时对副本列表求解，被拒绝也不会就地污染已提交快照里的对象。
+        """
+        return replace(
+            self,
+            answers=self.answers,
+            records=self.records,
+            raw=self.raw,
+            old_violations=list(self.old_violations),
+            new_violations=list(self.new_violations),
         )
-    for f in cfg.followups:
-        verb = "展示" if f.shown else "跳过"
-        constraints.append(
-            Constraint(
-                kind="followup",
-                ref=f.qid,
-                required=bool(f.shown),
-                description=f"追问题 {f.qid} 当时被{verb}，条件（{f.condition_display}）须为{'真' if f.shown else '假'}",
-            )
-        )
-    return constraints
 
 
-def _mask_feasible(mask: int, cfg: AnalysisConfig, constraints: List[Constraint],
-                   index_of: Dict[str, int]) -> bool:
-    for c in constraints:
-        if c.kind == "answer":
-            actual = bool(mask & (1 << index_of[c.ref]))
-        else:
-            followup = _followup_map(cfg)[c.ref]
-            actual = evaluate_mask(followup.condition_ast, mask, index_of)
-        if actual != c.required:
+@dataclass
+class BatchResult:
+    solvable: bool
+    responses: List[ResponseData]
+    stuck_serials: List[str] = field(default_factory=list)
+    # 可行新版段的范围描述（用于页面说明）
+    feasible_runs: List[Dict[str, int]] = field(default_factory=list)
+    count_confirmed_new: int = 0
+    count_confirmed_old: int = 0
+    count_pending: int = 0
+
+    @property
+    def count(self) -> int:
+        return len(self.responses)
+
+
+# --------------------------------------------------------------------------
+# 解析与规范化
+# --------------------------------------------------------------------------
+
+def _as_bool(value, where: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("true", "1", "yes", "真", "是"):
+            return True
+        if low in ("false", "0", "no", "假", "否"):
             return False
-    return True
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise BatchError(f"{where} 必须是布尔值（true/false）")
 
 
-def _followup_map(cfg: AnalysisConfig) -> Dict[str, FollowUp]:
-    return {f.qid: f for f in cfg.followups}
+def normalize_response(raw: Any) -> ResponseData:
+    """把一份原始答卷 dict 规范化为 ResponseData；结构错误记录在 parse_error。"""
+    if not isinstance(raw, dict):
+        return ResponseData(serial="", answers={}, records={}, raw={},
+                            parse_error="答卷不是 JSON 对象")
+    serial = raw.get("serial")
+    if not isinstance(serial, str) or not serial.strip():
+        return ResponseData(serial="", answers=raw.get("answers") if isinstance(raw, dict) else {},
+                            records={}, raw=raw, parse_error="缺少非空字符串字段 serial（流水号）")
+    serial = serial.strip()
+
+    raw_answers = raw.get("answers", {})
+    if not isinstance(raw_answers, dict):
+        return ResponseData(serial=serial, answers={}, records={}, raw=raw,
+                            parse_error="answers 必须是 JSON 对象")
+    answers: Dict[str, Any] = {}
+    for k, v in raw_answers.items():
+        if not isinstance(k, str) or not k.strip():
+            return ResponseData(serial=serial, answers={}, records={}, raw=raw,
+                                parse_error="answers 的题号必须是非空字符串")
+        answers[k.strip()] = v
+
+    records: Dict[str, bool] = {}
+    if "records" in raw and raw["records"] is not None:
+        raw_records = raw["records"]
+        if not isinstance(raw_records, list):
+            return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                parse_error="records 必须是数组")
+        for entry in raw_records:
+            if not isinstance(entry, dict) or "qid" not in entry:
+                return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                    parse_error="records 每一项必须是含 qid 的对象")
+            qid = str(entry["qid"]).strip()
+            if not qid:
+                return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                    parse_error="records 中存在空题号")
+            if qid in records:
+                return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                    parse_error=f"records 中题号 {qid} 重复")
+            records[qid] = _as_bool(entry.get("shown", True), f"题 {qid} 的 shown")
+    else:
+        # 兼容形式：shown_qids（列出的为展示，其余为跳过，需结合版本题目全集核对）
+        shown_qids = raw.get("shown_qids", [])
+        if not isinstance(shown_qids, list):
+            return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                parse_error="shown_qids 必须是数组")
+        for q in shown_qids:
+            qid = str(q).strip()
+            if not qid:
+                return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                    parse_error="shown_qids 中存在空题号")
+            if qid in records:
+                return ResponseData(serial=serial, answers=answers, records={}, raw=raw,
+                                    parse_error=f"shown_qids 中题号 {qid} 重复")
+            records[qid] = True
+
+    return ResponseData(serial=serial, answers=answers, records=records, raw=raw)
 
 
-def enumerate_feasible(cfg: AnalysisConfig, answers: Dict[str, bool]
-                       ) -> Tuple[List[bool], List[Constraint]]:
-    """返回每个掩码是否可行，以及本次使用的约束列表。"""
-    n = len(cfg.items)
-    index_of = cfg.index_of()
-    constraints = build_constraints(cfg, answers)
-    flags = [_mask_feasible(mask, cfg, constraints, index_of)
-             for mask in range(1 << n)]
-    return flags, constraints
+def parse_batch(payload: Any, pair: QuestionnairePair) -> List[ResponseData]:
+    """解析整批上传的 JSON：支持顶层数组或 {"responses": [...]}。"""
+    if isinstance(payload, dict) and "responses" in payload:
+        items = payload["responses"]
+    else:
+        items = payload
+    if not isinstance(items, list):
+        raise BatchError("答卷批次必须是数组，或含 responses 数组的对象")
+    if not items:
+        raise BatchError("答卷批次为空")
+    if len(items) > MAX_BATCH_SIZE:
+        raise BatchError(f"每批最多 {MAX_BATCH_SIZE} 份答卷，当前 {len(items)} 份")
+
+    responses = [normalize_response(item) for item in items]
+    serials = [r.serial for r in responses if r.serial]
+    dup = sorted({s for s in serials if serials.count(s) > 1})
+    if dup:
+        raise BatchError("流水号重复：" + "、".join(dup))
+    return responses
 
 
-def minimal_conflict(cfg: AnalysisConfig, answers: Dict[str, bool],
-                     constraints: List[Constraint]) -> List[Constraint]:
-    """求最小（按包含关系极小）不可满足约束核。
+# --------------------------------------------------------------------------
+# 相容性复算（更正一份时只调用这一份的逻辑）
+# --------------------------------------------------------------------------
 
-    思路：全集不可满足时，逐个尝试移除约束——移除后仍不可满足就永久删掉，
-    剩下的每个约束都必不可少，构成一个极小核。
+def recompute_compat(response: ResponseData, pair: QuestionnairePair) -> None:
+    """就地重算单份答卷对两版的相容性。"""
+    if response.parse_error is not None:
+        response.compat_old = False
+        response.compat_new = False
+        response.old_violations = [response.parse_error]
+        response.new_violations = [response.parse_error]
+        return
+    old_result = check_compatibility(
+        {"answers": response.answers, "records": response.records}, pair.old
+    )
+    new_result = check_compatibility(
+        {"answers": response.answers, "records": response.records}, pair.new
+    )
+    response.compat_old = old_result.compatible
+    response.compat_new = new_result.compatible
+    response.old_violations = old_result.violations
+    response.new_violations = new_result.violations
+
+
+# --------------------------------------------------------------------------
+# 可行划分求解
+# --------------------------------------------------------------------------
+
+def _find_runs(flags: List[bool]) -> List[tuple]:
+    """返回所有连续 True 段的 [起, 止]（含端点）。"""
+    runs: List[tuple] = []
+    start = None
+    for i, ok in enumerate(flags):
+        if ok and start is None:
+            start = i
+        elif not ok and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(flags) - 1))
+    return runs
+
+
+def solve(responses: List[ResponseData]) -> BatchResult:
+    """按当前 compat_old/compat_new 求全部可行划分并给每份答卷下结论。
+
+    会就地重写各 ResponseData 的 verdict。更正试算时调用方传入的是
+    ResponseData.copy_verdict_state() 副本列表，因此试算无解被拒绝也不会
+    污染已提交快照中的原始对象（见 engine/store.py）。
     """
-    index_of = cfg.index_of()
-    fmap = _followup_map(cfg)
+    n = len(responses)
+    compat_old = [r.compat_old for r in responses]
+    compat_new = [r.compat_new for r in responses]
 
-    def sat(subset: List[Constraint]) -> bool:
-        for mask in range(1 << len(cfg.items)):
-            ok = True
-            for c in subset:
-                if c.kind == "answer":
-                    actual = bool(mask & (1 << index_of[c.ref]))
-                else:
-                    actual = evaluate_mask(fmap[c.ref].condition_ast, mask, index_of)
-                if actual != c.required:
-                    ok = False
-                    break
-            if ok:
-                return True
-        return False
-
-    core = list(constraints)
-    for c in list(core):
-        trial = [x for x in core if x is not c]
-        if not sat(trial):
-            core = trial
-    return core
-
-
-def _inclusion_values(cfg: AnalysisConfig, flags: List[bool]) -> set:
-    index_of = cfg.index_of()
-    values = set()
-    for mask, ok in enumerate(flags):
-        if ok:
-            values.add(evaluate_mask(cfg.inclusion_ast, mask, index_of))
-    return values
-
-
-def decision_depth(cfg: AnalysisConfig, answers: Dict[str, bool],
-                   flags: Optional[List[bool]] = None
-                   ) -> Tuple[int, Optional[str], List[Tuple[str, int]], Dict[str, bool]]:
-    """计算从当前状态出发的最小最坏提问数。
-
-    返回 (最坏题数, 推荐变量, 全部候选变量及其最坏题数, 被约束隐含确定的未答项)。
-    若纳入结论已唯一（或无未答项），最坏题数为 0。
-
-    优化：可行补全预存为掩码元组，状态转移只在当前相容补全集上做位过滤；
-    递归仅访问由可行补全实际可达的状态（n<=12 时上界 3^n 约 53 万），
-    配合记忆化与“遇到理论下限 1 即剪枝”，满配也在毫秒级完成。
-    """
-    n = len(cfg.items)
-    index_of = cfg.index_of()
-    if flags is None:
-        flags, _ = enumerate_feasible(cfg, answers)
-
-    feasible_masks = tuple(mask for mask, ok in enumerate(flags) if ok)
-    inclusion_of = [
-        evaluate_mask(cfg.inclusion_ast, mask, index_of)
-        for mask in range(1 << n)
+    # 结构损坏或与两版都不相容的答卷，直接卡住划分
+    stuck = [
+        responses[i].serial
+        for i in range(n)
+        if not compat_old[i] and not compat_new[i]
     ]
 
-    fixed_mask = 0
-    fixed_bits = 0
-    for name, value in answers.items():
-        bit = 1 << index_of[name]
-        fixed_bits |= bit
-        if value:
-            fixed_mask |= bit
+    # 必须进新版段（只与新版相容）/ 必须在新版段外（只与旧版相容）的位置
+    must_new_idx = [i for i in range(n) if compat_new[i] and not compat_old[i]]
+    must_old_idx = [i for i in range(n) if compat_old[i] and not compat_new[i]]
+    both_idx = {i for i in range(n) if compat_old[i] and compat_new[i]}
 
-    implied: Dict[str, bool] = {}
-    for name in cfg.items:
-        if name in answers:
-            continue
-        bit = 1 << index_of[name]
-        vals = {bool(mask & bit) for mask in feasible_masks}
-        if len(vals) == 1:
-            implied[name] = vals.pop()
+    new_runs = _find_runs(compat_new)
 
-    initial_pool = tuple(
-        m for m in feasible_masks
-        if (m & fixed_bits) == (fixed_mask & fixed_bits)
-    )
+    # 检查所有 must-new 位置能否被同一个新版相容段包住，且段内不含 must-old 点
+    must_old_set = set(must_old_idx)
+    chosen_run: Optional[tuple] = None
+    if must_new_idx:
+        first_mn, last_mn = must_new_idx[0], must_new_idx[-1]
+        for run in new_runs:
+            if run[0] <= first_mn and last_mn <= run[1]:
+                if any(run[0] <= j <= run[1] for j in must_old_set):
+                    continue
+                chosen_run = run
+                break
+        if chosen_run is None and not stuck:
+            # 找出最直接的卡住流水号：跨段的 must-new，或段内挡路的 must-old
+            stuck = _explain_no_run(responses, must_new_idx, must_old_idx, new_runs)
 
-    memo: Dict[Tuple[int, int], int] = {}
-
-    def depth(pool: Tuple[int, ...], cur_mask: int, cur_bits: int) -> int:
-        outcomes = {inclusion_of[mask] for mask in pool}
-        if len(outcomes) <= 1:
-            return 0
-        key = (cur_mask, cur_bits)
-        cached = memo.get(key)
-        if cached is not None:
-            return cached
-        best = n + 1
-        for idx in range(n):
-            bit = 1 << idx
-            if cur_bits & bit:
-                continue
-            branch_false = tuple(m for m in pool if not (m & bit))
-            branch_true = tuple(m for m in pool if m & bit)
-            branches = [b for b in (branch_false, branch_true) if b]
-            if not branches:
-                continue
-            need = 1 + max(
-                depth(b, cur_mask | (bit if i else 0), cur_bits | bit)
-                for i, b in enumerate(branches)
-            )
-            if need < best:
-                best = need
-                if best == 1:
-                    break  # 理论下限，提前剪枝
-        result = 0 if best > n else best
-        memo[key] = result
-        return result
-
-    # 逐变量计算，用于页面展示候选排序
-    candidates: List[Tuple[str, int]] = []
-    for idx, name in enumerate(cfg.items):
-        if name in answers:
-            continue
-        bit = 1 << idx
-        branch_false = tuple(m for m in initial_pool if not (m & bit))
-        branch_true = tuple(m for m in initial_pool if m & bit)
-        branches = [b for b in (branch_false, branch_true) if b]
-        if branches:
-            candidates.append((
-                name,
-                1 + max(depth(b, bit if i else 0, bit) for i, b in enumerate(branches)),
-            ))
-
-    candidates.sort(key=lambda t: (t[1], cfg.items.index(t[0])))
-    worst = depth(initial_pool, fixed_mask, fixed_bits)
-    recommended = candidates[0][0] if candidates else None
-    return worst, recommended, candidates, implied
-
-
-def analyze(cfg: AnalysisConfig, answers: Dict[str, bool]) -> AnalysisResult:
-    """主入口：对当前已答状态做完整判定。"""
-    flags, constraints = enumerate_feasible(cfg, answers)
-    feasible_count = sum(flags)
-
-    if feasible_count == 0:
-        conflict = minimal_conflict(cfg, answers, constraints)
-        return AnalysisResult(
-            satisfiable=False,
-            answers=dict(answers),
-            feasible_count=0,
-            inclusion_values=set(),
-            verdict="conflict",
-            worst_remaining=None,
-            recommended=None,
-            candidates=[],
-            implied={},
-            conflicting=conflict,
-            feasibility_by_mask=flags,
+    if stuck or (must_new_idx and chosen_run is None):
+        if not stuck:
+            stuck = _explain_no_run(responses, must_new_idx, must_old_idx, new_runs)
+        for r in responses:
+            r.verdict = UNSOLVABLE
+        return BatchResult(
+            solvable=False,
+            responses=responses,
+            stuck_serials=_dedupe_keep_order(stuck),
+            feasible_runs=[],
         )
 
-    values = _inclusion_values(cfg, flags)
-    if len(values) == 1:
-        verdict = "include" if True in values else "exclude"
-        worst, recommended, candidates, implied = decision_depth(cfg, answers, flags)
-        return AnalysisResult(
-            satisfiable=True,
-            answers=dict(answers),
-            feasible_count=feasible_count,
-            inclusion_values=values,
-            verdict=verdict,
-            worst_remaining=0,
-            recommended=None,
-            candidates=[],
-            implied=implied,
-            conflicting=[],
-            feasibility_by_mask=flags,
-        )
+    verdicts = [PENDING] * n
+    feasible_runs: List[Dict[str, int]] = []
 
-    worst, recommended, candidates, implied = decision_depth(cfg, answers, flags)
-    return AnalysisResult(
-        satisfiable=True,
-        answers=dict(answers),
-        feasible_count=feasible_count,
-        inclusion_values=values,
-        verdict="uncertain",
-        worst_remaining=worst,
-        recommended=recommended,
-        candidates=candidates,
-        implied=implied,
-        conflicting=[],
-        feasibility_by_mask=flags,
+    if chosen_run is not None:
+        # 可行新版段为 chosen_run 的任意含 [first_mn, last_mn] 的子区间
+        first_mn, last_mn = must_new_idx[0], must_new_idx[-1]
+        run_start, run_end = chosen_run
+        for i in range(n):
+            if first_mn <= i <= last_mn:
+                verdicts[i] = CONFIRMED_NEW
+            elif run_start <= i <= run_end and i in both_idx:
+                verdicts[i] = PENDING
+            else:
+                verdicts[i] = CONFIRMED_OLD
+        feasible_runs = [{
+            "run_start": run_start,
+            "run_end": run_end,
+            "must_start": first_mn,
+            "must_end": last_mn,
+        }]
+    else:
+        # 没有 must-new 点：空段（全旧）或任一新版相容段的任意子区间都是可行划分
+        for i in range(n):
+            verdicts[i] = PENDING if i in both_idx else CONFIRMED_OLD
+        feasible_runs = [
+            {"run_start": s, "run_end": e, "must_start": -1, "must_end": -1}
+            for (s, e) in new_runs
+        ]
+
+    for r, v in zip(responses, verdicts):
+        r.verdict = v
+
+    return BatchResult(
+        solvable=True,
+        responses=responses,
+        stuck_serials=[],
+        feasible_runs=feasible_runs,
+        count_confirmed_new=sum(v == CONFIRMED_NEW for v in verdicts),
+        count_confirmed_old=sum(v == CONFIRMED_OLD for v in verdicts),
+        count_pending=sum(v == PENDING for v in verdicts),
     )
+
+
+def _explain_no_run(responses, must_new_idx, must_old_idx, new_runs) -> List[str]:
+    """无解（非两版皆不相容）时挑出卡住划分的流水号。"""
+    first_mn, last_mn = must_new_idx[0], must_new_idx[-1]
+    # 落在首个/末个必须新版位置之间、却与新版不相容的点
+    blockers = [
+        responses[i].serial
+        for i in range(first_mn, last_mn + 1)
+        if not responses[i].compat_new
+    ]
+    if blockers:
+        return blockers
+    # 否则是 must-new 点分散在多个新版相容段
+    covering_runs = [
+        run for run in new_runs
+        if any(run[0] <= i <= run[1] for i in must_new_idx)
+    ]
+    if len(covering_runs) >= 2:
+        return [responses[first_mn].serial, responses[last_mn].serial]
+    # 兜底：段内挡路的 must-old 点
+    return [responses[i].serial for i in must_old_idx] or [
+        responses[first_mn].serial
+    ]
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen: set = set()
+    out: List[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def build_batch(payload: Any, pair: QuestionnairePair) -> BatchResult:
+    """解析 + 逐份相容 + 求解 的完整入口。"""
+    responses = parse_batch(payload, pair)
+    for r in responses:
+        recompute_compat(r, pair)
+    return solve(responses)

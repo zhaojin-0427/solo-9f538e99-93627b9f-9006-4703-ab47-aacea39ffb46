@@ -1,0 +1,94 @@
+{
+  "responses": [
+    {
+      "serial": "R0001",
+      "answers": {"Q1": "B", "Q4": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": false},
+        {"qid": "Q3", "shown": false},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅旧版相容：新版 Q2 无条件展示，本份却跳过 Q2"
+    },
+    {
+      "serial": "R0002",
+      "answers": {"Q1": "A", "Q2": true, "Q3": 25, "Q4": false},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅旧版相容：旧版 Q4 无条件展示；新版 Q3=25<30 时 Q4 应跳过却记录为展示"
+    },
+    {
+      "serial": "R0003",
+      "answers": {"Q1": "A", "Q2": false, "Q4": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": false},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅旧版相容：旧版 Q2=false 时 Q3 跳过成立；新版 Q3 无条件展示却被跳过"
+    },
+    {
+      "serial": "R0004",
+      "answers": {"Q1": "A", "Q2": true, "Q3": 40, "Q4": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅旧版相容（自然旧版答卷，无新版独有题 Q5 的任何记录）；可行新版段从 R0005 开始"
+    },
+    {
+      "serial": "R0005",
+      "answers": {"Q1": "D", "Q2": true, "Q3": 45, "Q4": true, "Q5": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true},
+        {"qid": "Q5", "shown": true}
+      ],
+      "_note": "仅新版相容：Q1=D 是新版独有选项，且含新版独有题 Q5"
+    },
+    {
+      "serial": "R0006",
+      "answers": {"Q1": "A", "Q2": true, "Q3": 50, "Q4": false, "Q5": false},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true},
+        {"qid": "Q5", "shown": true}
+      ],
+      "_note": "仅新版相容：含新版独有题 Q5；旧版只有 4 题，多出的 Q5 记录使旧版不相容"
+    },
+    {
+      "serial": "R0007",
+      "answers": {"Q1": "B", "Q2": false, "Q3": 60, "Q4": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": true},
+        {"qid": "Q3", "shown": true},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅新版相容：旧版 Q2 仅在 Q1=A 时展示，本份 Q1=B 却展示 Q2；新版 Q2 无条件、Q3=60 时 Q4 展示"
+    },
+    {
+      "serial": "R0008",
+      "answers": {"Q1": "C", "Q4": true},
+      "records": [
+        {"qid": "Q1", "shown": true},
+        {"qid": "Q2", "shown": false},
+        {"qid": "Q3", "shown": false},
+        {"qid": "Q4", "shown": true}
+      ],
+      "_note": "仅旧版相容（同 R0001 模式），把可行新版段夹在中间"
+    }
+  ]
+}
