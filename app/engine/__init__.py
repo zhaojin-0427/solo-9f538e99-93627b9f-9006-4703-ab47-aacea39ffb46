@@ -20,6 +20,24 @@ from .config import (
     validate_archive,
 )
 from .solver import AnalysisResult, analyze, build_constraints, decision_depth
+from .versioncheck import (
+    MAX_BATCH,
+    STATUS_LABELS,
+    STATUS_NEW,
+    STATUS_OLD,
+    STATUS_PENDING,
+    BatchError,
+    Classification,
+    ResponseRecord,
+    VersionConfig,
+    build_version_config,
+    classify,
+    judge,
+    normalize_serial,
+    parse_response,
+    parse_responses,
+    sort_serials,
+)
 
 __all__ = [
     "ConditionError",
@@ -41,4 +59,20 @@ __all__ = [
     "analyze",
     "build_constraints",
     "decision_depth",
+    "MAX_BATCH",
+    "STATUS_LABELS",
+    "STATUS_NEW",
+    "STATUS_OLD",
+    "STATUS_PENDING",
+    "BatchError",
+    "Classification",
+    "ResponseRecord",
+    "VersionConfig",
+    "build_version_config",
+    "classify",
+    "judge",
+    "normalize_serial",
+    "parse_response",
+    "parse_responses",
+    "sort_serials",
 ]

@@ -30,13 +30,14 @@ echo "$page" | grep -q "结论有分歧" && echo "2) 分歧状态与最坏题数
 echo "$page" | grep -q "从当前起最坏还要问几题" && echo "   最坏题数卡片 OK"
 
 echo "3) 冲突补问：S2 被跳题约束隐含为假，答是应被拒绝并保留原结果"
-code=$(post /answer "item=S2&value=true")
-page="$(curl -sS -b "$jar" "$BASE/")"
+# 跟随重定向的那次响应即含 flash（再次 GET 会消费掉），直接检查该响应
+page="$(curl -sS -b "$jar" -c "$jar" -L --data-urlencode "item=S2" --data-urlencode "value=true" "$BASE/answer")"
 echo "$page" | grep -q "与旧档记录冲突" && echo "   冲突提示 OK" || { echo "   FAIL"; exit 1; }
 echo "$page" | grep -q "上次提交因冲突被拒绝" && echo "   保留提交前结果 OK"
 
 echo "4) 正常补问 S3=是，应直接判定纳入"
-code=$(post /answer "item=S3&value=true")
+code=$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" -L \
+     --data-urlencode "item=S3" --data-urlencode "value=true" "$BASE/answer")
 page="$(curl -sS -b "$jar" "$BASE/")"
 echo "$page" | grep -q "纳入新版夜骑分析" && echo "   纳入判定 OK" || { echo "   FAIL"; exit 1; }
 

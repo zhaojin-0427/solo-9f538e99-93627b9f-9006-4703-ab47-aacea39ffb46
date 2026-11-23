@@ -8,8 +8,14 @@
 </head>
 <body>
 <header>
+  {% block header %}
   <h1>旧答卷夜骑纳入核查</h1>
   <p class="sub">交通调查 · 旧版答卷可补全性与新版纳入判定</p>
+  {% endblock %}
+  <nav class="topnav">
+    <a href="{{ url_for('index') }}">单份纳入核查</a>
+    <a href="{{ url_for('version_check') }}">版号核查</a>
+  </nav>
 </header>
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}

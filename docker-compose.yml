@@ -7,4 +7,12 @@ services:
     environment:
       # 生产部署请改为固定随机值，例如：openssl rand -hex 32
       SECRET_KEY: "${SECRET_KEY:-dev-only-change-me-in-production}"
+      # 版号核查批次库（SQLite）位置；默认 /app/instance/versioncheck.sqlite3
+      BATCH_DB_PATH: "${BATCH_DB_PATH:-/app/instance/versioncheck.sqlite3}"
+    volumes:
+      # 批次数据（两版配置、答卷、各已提交状态）跨容器重启保留；不需要可删掉
+      - nightride-data:/app/instance
     restart: unless-stopped
+
+volumes:
+  nightride-data:

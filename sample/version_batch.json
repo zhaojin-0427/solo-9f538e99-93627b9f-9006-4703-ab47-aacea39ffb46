@@ -1,0 +1,52 @@
+{
+  "old_config": {
+    "items": ["S1", "S2", "S3"],
+    "labels": {
+      "S1": "夜间骑行时佩戴头盔",
+      "S2": "车辆配有车前灯",
+      "S3": "单次夜骑超过30分钟"
+    },
+    "followups": [
+      {"qid": "Q1", "condition": "S1 AND NOT S2"},
+      {"qid": "Q2", "condition": "S3 OR S1"}
+    ]
+  },
+  "new_config": {
+    "items": ["S1", "S2", "S3"],
+    "labels": {
+      "S1": "夜间骑行时佩戴头盔",
+      "S2": "车辆配有车前灯",
+      "S3": "单次夜骑超过30分钟"
+    },
+    "followups": [
+      {"qid": "Q1", "condition": "S1 AND NOT S2"},
+      {"qid": "Q2", "condition": "S3 AND NOT S1"}
+    ]
+  },
+  "responses": [
+    {"serial": "101", "answers": {"S1": true, "S2": true},
+     "shown": {"Q1": false, "Q2": true}},
+    {"serial": "102", "answers": {"S1": true},
+     "shown": {"Q1": true, "Q2": true}},
+    {"serial": "103", "answers": {},
+     "shown": {"Q1": true, "Q2": true}},
+    {"serial": "104", "answers": {},
+     "shown": {"Q1": true, "Q2": false}},
+    {"serial": "105", "answers": {},
+     "shown": {"Q1": false, "Q2": false}},
+    {"serial": "106", "answers": {},
+     "shown": {"Q1": true, "Q2": false}},
+    {"serial": "107", "answers": {},
+     "shown": {"Q1": false, "Q2": true}},
+    {"serial": "108", "answers": {"S2": false},
+     "shown": {"Q1": false, "Q2": true}},
+    {"serial": "109", "answers": {"S1": true, "S2": false},
+     "shown": {"Q1": true, "Q2": false}},
+    {"serial": "110", "answers": {"S1": true, "S2": true},
+     "shown": {"Q1": false, "Q2": false}},
+    {"serial": "111", "answers": {},
+     "shown": {"Q1": false, "Q2": false}},
+    {"serial": "112", "answers": {},
+     "shown": {"Q1": false, "Q2": true}}
+  ]
+}

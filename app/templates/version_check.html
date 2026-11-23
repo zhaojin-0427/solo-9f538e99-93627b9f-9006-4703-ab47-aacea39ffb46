@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}版号核查 · 夜骑问卷{% endblock %}
+{% block header %}
+<h1>夜骑问卷版号核查</h1>
+<p class="sub">终端试用新版后换回旧版 · 按流水号核定每份答卷的版号</p>
+{% endblock %}
+{% block body %}
+
+{# ---------------- 1. 建立批次 ---------------- #}
+<section class="card">
+  <h2>1. 建立核查批次</h2>
+  <p class="hint">填写旧版、新版两版配置（筛查项 + 各追问题展示条件），并上传该终端导出的整批答卷
+    （每批最多 {{ max_batch }} 份，每份须有唯一流水号）。三栏也可合并为一个
+    <code>{"old_config": {...}, "new_config": {...}, "responses": [...]}</code>
+    文件放在“答卷批次”一栏。示例见 <code>sample/version_batch.json</code>。</p>
+  <form method="post" action="{{ url_for('version_check_setup') }}" enctype="multipart/form-data">
+    <h3>旧版配置</h3>
+    <textarea name="old_config_text" rows="7" placeholder='{
+  "items": ["S1", "S2", "S3"],
+  "labels": {"S1": "夜间佩戴头盔", "S2": "配有车前灯", "S3": "单次夜骑超30分钟"},
+  "followups": [
+    {"qid": "Q1", "condition": "S1 AND NOT S2"},
+    {"qid": "Q2", "condition": "S3 OR S1"}
+  ]
+}'></textarea>
+    <div class="row"><input type="file" name="old_config_file" accept=".json,application/json"></div>
+    <h3>新版配置</h3>
+    <textarea name="new_config_text" rows="7" placeholder='{
+  "items": ["S1", "S2", "S3"],
+  "labels": {"S1": "夜间佩戴头盔", "S2": "配有车前灯", "S3": "单次夜骑超30分钟"},
+  "followups": [
+    {"qid": "Q1", "condition": "S1 AND NOT S2"},
+    {"qid": "Q2", "condition": "S3 AND NOT S1"}
+  ]
+}'></textarea>
+    <div class="row"><input type="file" name="new_config_file" accept=".json,application/json"></div>
+    <h3>答卷批次</h3>
+    <textarea name="responses_text" rows="9" placeholder='{
+  "responses": [
+    {"serial": "101", "answers": {"S1": true},
+     "followups": [{"qid": "Q1", "shown": true}, {"qid": "Q2", "shown": false}]},
+    {"serial": "102", "answers": {},
+     "shown": {"Q1": false, "Q2": true}}
+  ]
+}'></textarea>
+    <div class="row">
+      <input type="file" name="responses_file" accept=".json,application/json">
+      <button type="submit">导入并核定版号</button>
+      {% if view %}
+      <button type="submit" formaction="{{ url_for('version_check_reset') }}" formmethod="post" class="ghost">清空批次</button>
+      {% endif %}
+    </div>
+  </form>
+</section>
+
+{% if view %}
+{# ---------------- 2. 批次概览 ---------------- #}
+<section class="card">
+  <h2>2. 批次概览 <span class="state-tag">已提交状态 v{{ view.state_version }}</span></h2>
+  <div class="stat-grid">
+    <div class="stat"><div class="stat-num">{{ view.classification.counts['total'] }}</div><div class="stat-label">答卷总数</div></div>
+    <div class="stat"><div class="stat-num st-new-text">{{ view.classification.counts['new'] }}</div><div class="stat-label">确定新版</div></div>
+    <div class="stat"><div class="stat-num st-old-text">{{ view.classification.counts['old'] }}</div><div class="stat-label">确定旧版</div></div>
+    <div class="stat"><div class="stat-num st-pending-text">{{ view.classification.counts['pending'] }}</div><div class="stat-label">待核</div></div>
+  </div>
+  {% if view.classification.must_new_span %}
+  <p>必属新版的流水号区间：<code>{{ view.classification.must_new_span[0] }}</code> ～
+    <code>{{ view.classification.must_new_span[1] }}</code>；新版段最早可自
+    <code>{{ view.classification.new_segment_bounds[0] }}</code> 起、最晚至
+    <code>{{ view.classification.new_segment_bounds[1] }}</code> 止。</p>
+  {% else %}
+  <p>没有必属新版的答卷：新版段可以为空，也可落在任意连续的“可新版”区间。</p>
+  {% endif %}
+  <p>入仓规则：只收<strong>在所有可行划分下都属新版</strong>的答卷，当前共
+    <strong>{{ view.classification.warehouse | length }}</strong> 份。</p>
+  <div class="row">
+    <a class="button" href="{{ url_for('version_check_download') }}" download>下载入仓 JSON（v{{ view.state_version }}）</a>
+  </div>
+</section>
+
+{# ---------------- 3. 单份查询 ---------------- #}
+<section class="card">
+  <h2>3. 按流水号查询</h2>
+  <form method="get" action="{{ url_for('version_check') }}" class="row">
+    <input type="text" name="serial" value="{{ focus_serial }}" placeholder="流水号，如 105" class="serial-input">
+    <button type="submit">查询</button>
+  </form>
+  {% if focus %}
+  <div class="detail-card">
+    <p>流水号 <code>{{ focus.serial }}</code>：
+      <span class="tag st-{{ focus.status }}">{{ status_labels[focus.status] }}</span>
+      <span class="hint">（旧版{{ '相容' if focus.old_ok else '不相容' }} /
+        新版{{ '相容' if focus.new_ok else '不相容' }}）</span></p>
+    <p><strong>已答项：</strong>
+      {% if focus.answers %}
+        {% for k, v in focus.answers.items() %}<code>{{ k }} = {{ v | yn }}</code> {% endfor %}
+      {% else %}<span class="hint">无</span>{% endif %}</p>
+    <p><strong>逐题记录：</strong>
+      {% for qid, shown in focus.shown.items() %}
+        <span class="tag {{ 'answered' if shown else 'unknown' }}">{{ qid }} {{ '展示' if shown else '跳过' }}</span>
+      {% endfor %}</p>
+  </div>
+  {% endif %}
+</section>
+
+{# ---------------- 4. 更正一份 ---------------- #}
+<section class="card">
+  <h2>4. 按流水号更正一份</h2>
+  <p class="hint">粘贴更正后的完整答卷 JSON（含原流水号）。只重判这一份与两版是否相容，
+    其余答卷不重判、不改写；若更正使整批无解，本次更正整体回退并指出卡住划分的流水号。
+    更正期间下载照常进行，下载内容始终来自同一个已提交状态。</p>
+  <form method="post" action="{{ url_for('version_check_correct') }}" enctype="multipart/form-data">
+    <textarea name="response_text" rows="7" placeholder='{
+  "serial": "105",
+  "answers": {"S1": true},
+  "followups": [{"qid": "Q1", "shown": true}, {"qid": "Q2", "shown": true}]
+}'></textarea>
+    <div class="row">
+      <input type="file" name="response_file" accept=".json,application/json">
+      <button type="submit">提交更正</button>
+    </div>
+  </form>
+</section>
+
+{# ---------------- 5. 状态表 ---------------- #}
+<section class="card">
+  <h2>5. 全批版号核定表</h2>
+  <table>
+    <thead><tr><th>流水号</th><th>核定结果</th><th>旧版相容</th><th>新版相容</th><th>已答项</th><th>展示/跳过</th></tr></thead>
+    <tbody>
+    {% for row in view.rows %}
+      <tr id="r-{{ row.serial }}" {% if focus and row.serial == focus.serial %}class="focus-row"{% endif %}>
+        <td><code>{{ row.serial }}</code></td>
+        <td><span class="tag st-{{ row.status }}">{{ status_labels[row.status] }}</span></td>
+        <td>{{ '✓' if row.old_ok else '✗' }}</td>
+        <td>{{ '✓' if row.new_ok else '✗' }}</td>
+        <td class="mono">
+          {% for k, v in row.answers.items() %}{{ k }}={{ v | yn }}{{ "；" if not loop.last }}{% else %}—{% endfor %}
+        </td>
+        <td class="mono">
+          {% for qid, shown in row.shown.items() %}{{ qid }}{{ '展' if shown else '跳' }}{{ " " if not loop.last }}{% endfor %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% endblock %}
